@@ -5,6 +5,4 @@ jinja2
 numpy
 weasyprint
 python-dateutil
-et-xmlfile
-pytz
-tzdata
+

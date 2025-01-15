@@ -2,6 +2,5 @@ streamlit
 pandas
 numpy
 openpyxl
-zipfile
 jinja2
-
+python-dateutil

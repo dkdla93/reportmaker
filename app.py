@@ -9,17 +9,15 @@ import zipfile
 import jinja2
 from datetime import datetime
 import traceback
-from weasyprint import HTML, CSS
-from weasyprint.text.fonts import FontConfiguration
 
 # WeasyPrint 조건부 임포트
-PDF_ENABLED = True
+PDF_ENABLED = False
 try:
     from weasyprint import HTML, CSS
     from weasyprint.text.fonts import FontConfiguration
+    PDF_ENABLED = True
 except Exception as e:
-    PDF_ENABLED = False
-    print(f"PDF 기능을 사용할 수 없습니다: {str(e)}")
+    print(f"[WARNING] PDF 기능을 사용할 수 없습니다: {str(e)}")
 
 def clean_numeric_value(value):
     """숫자 값을 안전하게 처리합니다."""
@@ -323,23 +321,18 @@ def convert_html_to_pdf(html_content, creator_id):
     try:
         print(f"[DEBUG] PDF 생성 시작 - 크리에이터: {creator_id}")
         
-        # 폰트 설정
-        font_config = FontConfiguration()
-        
         # CSS 설정
         css = CSS(string='''
             @page {
                 size: A4 portrait;
                 margin: 8mm;
             }
-
             body {
                 font-family: system-ui, -apple-system, sans-serif;
                 margin: 0;
                 padding: 0;
                 box-sizing: border-box;
             }
-            
             .report-container {
                 max-width: 100%;
                 padding: 8px;
@@ -411,7 +404,7 @@ def convert_html_to_pdf(html_content, creator_id):
             .number-cell {
                 text-align: right !important;
             }
-        ''', font_config=font_config)
+        ''')
 
         # HTML 직접 생성 (외부 리소스 요청 없이)
         html_doc = HTML(
@@ -424,8 +417,7 @@ def convert_html_to_pdf(html_content, creator_id):
         pdf_buffer = BytesIO()
         html_doc.write_pdf(
             target=pdf_buffer,
-            stylesheets=[css],
-            font_config=font_config
+            stylesheets=[css]
         )
         pdf_buffer.seek(0)
 
@@ -498,13 +490,14 @@ def generate_reports(revenue_file, song_file, issue_date):
                         html_file_name = f"정산서_{artist}_202412.html"
                         zip_file.writestr(f"html/{html_file_name}", html_content.encode('utf-8'))
                         
-                        # PDF 파일 생성
-                        pdf_content = convert_html_to_pdf(html_content, artist)
-                        if pdf_content:
-                            pdf_file_name = f"정산서_{artist}_202412.pdf"
-                            zip_file.writestr(f"pdf/{pdf_file_name}", pdf_content)
-                        else:
-                            st.warning(f"{artist}: PDF 생성 실패")
+                        # PDF 파일 생성 (PDF_ENABLED가 True일 때만)
+                        if PDF_ENABLED:
+                            pdf_content = convert_html_to_pdf(html_content, artist)
+                            if pdf_content:
+                                pdf_file_name = f"정산서_{artist}_202412.pdf"
+                                zip_file.writestr(f"pdf/{pdf_file_name}", pdf_content)
+                            else:
+                                st.warning(f"{artist}: PDF 생성 실패")
                         
                         # 세부매출내역 엑셀 파일 생성
                         excel_buffer = BytesIO()
@@ -560,13 +553,13 @@ def main():
         
         if not PDF_ENABLED:
             st.warning("""
-                PDF 변환 기능을 사용할 수 없습니다.
-                HTML 파일만 생성됩니다.
-                로컬에서 실행하시려면 다음 라이브러리를 설치해주세요:
+                ⚠️ PDF 변환 기능을 사용할 수 없어 HTML 파일만 생성됩니다.
+                
+                로컬 환경에서 PDF 생성을 원하시면 다음 라이브러리를 설치해주세요:
                 
                 Ubuntu/Debian:
                 ```
-                sudo apt-get install python3-pip python3-cffi python3-brotli libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 libffi-dev
+                sudo apt-get install python3-pip python3-cffi python3-brotli libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0
                 ```
                 
                 macOS:

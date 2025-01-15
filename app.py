@@ -551,76 +551,128 @@ def main():
     try:
         st.title("아티스트별 정산서 생성 프로그램")
         
-        if not PDF_ENABLED:
-            st.warning("""
-                ⚠️ PDF 변환 기능을 사용할 수 없어 HTML 파일만 생성됩니다.
-                
-                로컬 환경에서 PDF 생성을 원하시면 다음 라이브러리를 설치해주세요:
-                
-                Ubuntu/Debian:
-                ```
-                sudo apt-get install python3-pip python3-cffi python3-brotli libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0
-                ```
-                
-                macOS:
-                ```
-                brew install pango
-                ```
-                
-                Windows:
-                GTK3 런타임 설치 필요
-            """)
+        # 탭 생성
+        tab1, tab2 = st.tabs(["정산서 생성", "HTML to PDF 변환"])
         
-        st.write("📊 정산 데이터 파일들을 업로드하면 아티스트별 정산서가 자동으로 생성됩니다.")
+        with tab1:
+            if not PDF_ENABLED:
+                st.warning("""
+                    ⚠️ PDF 변환 기능을 사용할 수 없어 HTML 파일만 생성됩니다.
+                    
+                    로컬 환경에서 PDF 생성을 원하시면 다음 라이브러리를 설치해주세요:
+                    
+                    Ubuntu/Debian:
+                    ```
+                    sudo apt-get install python3-pip python3-cffi python3-brotli libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0
+                    ```
+                    
+                    macOS:
+                    ```
+                    brew install pango
+                    ```
+                    
+                    Windows:
+                    GTK3 런타임 설치 필요
+                """)
+            
+            st.write("📊 정산 데이터 파일들을 업로드하면 아티스트별 정산서가 자동으로 생성됩니다.")
+            
+            # 발행일자 입력
+            issue_date = st.date_input(
+                "정산서 발행일자를 선택하세요",
+                value=pd.Timestamp('2025-01-15'),
+                format="YYYY-MM-DD"
+            ).strftime('%Y. %m. %d')
+            
+            # 파일 업로드
+            revenue_file = st.file_uploader(
+                "매출 정산 데이터 파일을 업로드하세요", 
+                type=['xlsx'], 
+                key="revenue",
+                help="매출 정산 데이터가 포함된 Excel 파일을 선택하세요."
+            )
+            
+            song_file = st.file_uploader(
+                "곡비 정산 데이터 파일을 업로드하세요", 
+                type=['xlsx'], 
+                key="song",
+                help="곡비 정산 데이터가 포함된 Excel 파일을 선택하세요."
+            )
+            
+            if revenue_file is not None and song_file is not None:
+                if st.button("보고서 생성", help="클릭하면 정산서 생성이 시작됩니다."):
+                    with st.spinner('보고서 생성 중...'):
+                        zip_buffer, processed_count, verification_result = generate_reports(
+                            revenue_file, song_file, issue_date
+                        )
+                        
+                        if zip_buffer and verification_result:
+                            st.success(f"총 {verification_result['total_artists']}명 중 "
+                                     f"{processed_count}명의 아티스트 정산서가 생성되었습니다!")
+                            
+                            # 처리되지 않은 아티스트 표시
+                            if verification_result['unprocessed_artists']:
+                                with st.expander("⚠️ 처리되지 않은 아티스트 목록", expanded=True):
+                                    st.warning("다음 아티스트들의 정산서가 생성되지 않았습니다:")
+                                    for artist in verification_result['unprocessed_artists']:
+                                        st.write(f"- {artist}")
+                            
+                            # 다운로드 버튼
+                            st.download_button(
+                                label="📥 전체 정산서 다운로드 (ZIP)",
+                                data=zip_buffer,
+                                file_name=f"정산서_전체_202412.zip",
+                                mime="application/zip",
+                                help="생성된 모든 정산서를 ZIP 파일로 다운로드합니다."
+                            )
         
-        # 발행일자 입력
-        issue_date = st.date_input(
-            "정산서 발행일자를 선택하세요",
-            value=pd.Timestamp('2025-01-15'),
-            format="YYYY-MM-DD"
-        ).strftime('%Y. %m. %d')
-        
-        # 파일 업로드
-        revenue_file = st.file_uploader(
-            "매출 정산 데이터 파일을 업로드하세요", 
-            type=['xlsx'], 
-            key="revenue",
-            help="매출 정산 데이터가 포함된 Excel 파일을 선택하세요."
-        )
-        
-        song_file = st.file_uploader(
-            "곡비 정산 데이터 파일을 업로드하세요", 
-            type=['xlsx'], 
-            key="song",
-            help="곡비 정산 데이터가 포함된 Excel 파일을 선택하세요."
-        )
-        
-        if revenue_file is not None and song_file is not None:
-            if st.button("보고서 생성", help="클릭하면 정산서 생성이 시작됩니다."):
-                with st.spinner('보고서 생성 중...'):
-                    zip_buffer, processed_count, verification_result = generate_reports(
-                        revenue_file, song_file, issue_date
+        with tab2:
+            st.write("📄 HTML 파일을 PDF로 변환")
+            
+            # HTML 파일 업로드
+            uploaded_html_files = st.file_uploader(
+                "HTML 파일을 업로드하세요",
+                type=['html'],
+                accept_multiple_files=True,
+                key="html_files"
+            )
+            
+            if uploaded_html_files:
+                if st.button("PDF 변환", key="convert_pdf"):
+                    # ZIP 파일 생성
+                    zip_buffer = BytesIO()
+                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                        for html_file in uploaded_html_files:
+                            try:
+                                # HTML 내용 읽기
+                                html_content = html_file.read().decode('utf-8')
+                                
+                                # PDF 변환
+                                pdf_content = convert_html_to_pdf(html_content, html_file.name)
+                                
+                                if pdf_content:
+                                    # PDF 파일명 생성
+                                    pdf_filename = os.path.splitext(html_file.name)[0] + '.pdf'
+                                    
+                                    # ZIP 파일에 추가
+                                    zip_file.writestr(pdf_filename, pdf_content)
+                                    
+                                    st.success(f"{html_file.name} 변환 완료!")
+                                else:
+                                    st.error(f"{html_file.name} 변환 실패")
+                            
+                            except Exception as e:
+                                st.error(f"{html_file.name} 처리 중 오류 발생: {str(e)}")
+                    
+                    # ZIP 파일 다운로드 버튼
+                    zip_buffer.seek(0)
+                    st.download_button(
+                        label="📥 변환된 PDF 파일 다운로드 (ZIP)",
+                        data=zip_buffer,
+                        file_name="converted_pdfs.zip",
+                        mime="application/zip"
                     )
                     
-                    if zip_buffer and verification_result:
-                        st.success(f"총 {verification_result['total_artists']}명 중 "
-                                 f"{processed_count}명의 아티스트 정산서가 생성되었습니다!")
-                        
-                        # 처리되지 않은 아티스트 표시
-                        if verification_result['unprocessed_artists']:
-                            with st.expander("⚠️ 처리되지 않은 아티스트 목록", expanded=True):
-                                st.warning("다음 아티스트들의 정산서가 생성되지 않았습니다:")
-                                for artist in verification_result['unprocessed_artists']:
-                                    st.write(f"- {artist}")
-                        
-                        # 다운로드 버튼
-                        st.download_button(
-                            label="📥 전체 정산서 다운로드 (ZIP)",
-                            data=zip_buffer,
-                            file_name=f"정산서_전체_202412.zip",
-                            mime="application/zip",
-                            help="생성된 모든 정산서를 ZIP 파일로 다운로드합니다."
-                        )
     except Exception as e:
         st.error(f"프로그램 실행 중 오류가 발생했습니다: {str(e)}")
 

@@ -8,8 +8,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import zipfile
 import jinja2
 from datetime import datetime
-import pdfkit
-import tempfile
+from weasyprint import HTML, CSS
+from weasyprint.text.fonts import FontConfiguration
 
 def clean_numeric_value(value):
     """숫자 값을 안전하게 처리합니다."""
@@ -311,39 +311,113 @@ def create_html_content(artist, issue_date, service_summary, album_summary, tota
 def convert_html_to_pdf(html_content):
     """HTML 내용을 PDF로 변환합니다."""
     try:
-        # wkhtmltopdf 설정
-        options = {
-            'encoding': 'UTF-8',
-            'page-size': 'A4',
-            'margin-top': '0.5in',
-            'margin-right': '0.5in',
-            'margin-bottom': '0.5in',
-            'margin-left': '0.5in',
-            'enable-local-file-access': None,
-            'no-outline': None,
-            'quiet': ''
-        }
+        print(f"[DEBUG] PDF 생성 시작")
         
-        # 임시 HTML 파일 생성
-        with tempfile.NamedTemporaryFile(suffix='.html', delete=False, mode='w', encoding='utf-8') as temp_html:
-            temp_html.write(html_content)
-            temp_html_path = temp_html.name
+        # 폰트 설정
+        font_config = FontConfiguration()
         
-        # 임시 PDF 파일 생성
-        temp_pdf_path = tempfile.mktemp(suffix='.pdf')
-        
-        # HTML을 PDF로 변환
-        pdfkit.from_file(temp_html_path, temp_pdf_path, options=options)
-        
-        # PDF 파일 읽기
-        with open(temp_pdf_path, 'rb') as pdf_file:
-            pdf_content = pdf_file.read()
-        
-        # 임시 파일 삭제
-        os.unlink(temp_html_path)
-        os.unlink(temp_pdf_path)
+        # CSS 설정
+        css = CSS(string='''
+            @page {
+                size: A4 portrait;
+                margin: 8mm;
+            }
+
+            body {
+                font-family: system-ui, -apple-system, sans-serif;
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            
+            .report-container {
+                max-width: 100%;
+                padding: 8px;
+            }
+            .header {
+                margin-bottom: 12px;
+            }
+            .header h1 {
+                font-size: 21px !important;
+                margin-bottom: 6px;
+                line-height: 1.2;
+                font-weight: bold;
+            }
+            .header .period {
+                font-size: 13px;
+                margin: 6px 0;
+            }
+            .header .disclaimer {
+                font-size: 11px;
+                margin: 4px 0;
+                line-height: 1.3;
+            }
+            .stats-grid {
+                max-width: 100%;
+                gap: 10px;
+                margin-bottom: 10px;
+            }
+            .stat-card {
+                padding: 10px;
+            }
+            .stat-card h3 {
+                font-size: 13px;
+                margin-bottom: 4px;
+            }
+            .stat-card .value {
+                font-size: 18px;
+            }
+            .earnings-table {
+                margin-top: 10px;
+                font-size: 0.7em;
+                border-spacing: 0;
+                border-collapse: collapse;
+            }
+            .earnings-table th {
+                font-size: 0.95em;
+                padding: 2px 3px;
+                line-height: 1;
+            }
+            .earnings-table td {
+                padding: 1px 3px;
+                line-height: 1;
+            }
+            .earnings-table tr {
+                height: auto !important;
+                border-bottom: 0.5px solid #e9ecef;
+            }
+            .earnings-table tbody tr {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            .earnings-table th,
+            .earnings-table td {
+                margin: 0 !important;
+                vertical-align: middle;
+            }
+        ''', font_config=font_config)
+
+        # HTML 직접 생성
+        html_doc = HTML(
+            string=html_content,
+            encoding='utf-8'
+        )
+
+        # PDF 생성
+        pdf_buffer = BytesIO()
+        html_doc.write_pdf(
+            target=pdf_buffer,
+            stylesheets=[css],
+            font_config=font_config
+        )
+        pdf_buffer.seek(0)
+
+        # PDF 생성 결과 확인
+        pdf_content = pdf_buffer.getvalue()
+        print(f"[DEBUG] PDF 생성 완료 - 크기: {len(pdf_content)} bytes")
         
         return pdf_content
+        
     except Exception as e:
         st.error(f"PDF 변환 중 오류 발생: {str(e)}")
         return None
@@ -463,19 +537,6 @@ def generate_reports(revenue_file, song_file, issue_date):
 def main():
     try:
         st.title("아티스트별 정산서 생성 프로그램")
-        
-        # wkhtmltopdf 설치 확인
-        try:
-            path_wkhtmltopdf = pdfkit.configuration()
-            if not path_wkhtmltopdf:
-                st.warning("""
-                    PDF 변환을 위해 wkhtmltopdf를 설치해주세요.
-                    - macOS: brew install wkhtmltopdf
-                    - Windows: https://wkhtmltopdf.org/downloads.html
-                    - Linux: sudo apt-get install wkhtmltopdf
-                """)
-        except Exception:
-            st.warning("PDF 변환을 위해 wkhtmltopdf가 필요합니다.")
         
         st.write("📊 정산 데이터 파일들을 업로드하면 아티스트별 정산서가 자동으로 생성됩니다.")
         

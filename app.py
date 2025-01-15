@@ -8,8 +8,16 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import zipfile
 import jinja2
 from datetime import datetime
-from weasyprint import HTML, CSS
-from weasyprint.text.fonts import FontConfiguration
+import traceback
+
+# WeasyPrint 조건부 임포트
+PDF_ENABLED = True
+try:
+    from weasyprint import HTML, CSS
+    from weasyprint.text.fonts import FontConfiguration
+except Exception as e:
+    PDF_ENABLED = False
+    print(f"PDF 기능을 사용할 수 없습니다: {str(e)}")
 
 def clean_numeric_value(value):
     """숫자 값을 안전하게 처리합니다."""
@@ -397,10 +405,11 @@ def convert_html_to_pdf(html_content):
             }
         ''', font_config=font_config)
 
-        # HTML 직접 생성
+        # HTML 직접 생성 (외부 리소스 요청 없이)
         html_doc = HTML(
             string=html_content,
-            encoding='utf-8'
+            encoding='utf-8',
+            base_url=None  # base_url 명시적으로 None으로 설정
         )
 
         # PDF 생성
@@ -408,7 +417,9 @@ def convert_html_to_pdf(html_content):
         html_doc.write_pdf(
             target=pdf_buffer,
             stylesheets=[css],
-            font_config=font_config
+            font_config=font_config,
+            optimize_size=('fonts', 'images'),  # PDF 크기 최적화
+            zoom=1.0  # 기본 확대/축소 설정
         )
         pdf_buffer.seek(0)
 
@@ -419,7 +430,8 @@ def convert_html_to_pdf(html_content):
         return pdf_content
         
     except Exception as e:
-        st.error(f"PDF 변환 중 오류 발생: {str(e)}")
+        print(f"PDF 변환 중 오류 발생: {str(e)}")
+        traceback.print_exc()
         return None
 
 def generate_reports(revenue_file, song_file, issue_date):
@@ -480,11 +492,12 @@ def generate_reports(revenue_file, song_file, issue_date):
                         html_file_name = f"정산서_{artist}_202412.html"
                         zip_file.writestr(f"html/{html_file_name}", html_content.encode('utf-8'))
                         
-                        # PDF 파일 생성 및 저장
-                        pdf_content = convert_html_to_pdf(html_content)
-                        if pdf_content:
-                            pdf_file_name = f"정산서_{artist}_202412.pdf"
-                            zip_file.writestr(f"pdf/{pdf_file_name}", pdf_content)
+                        # PDF 파일 생성 시도 (선택적)
+                        if PDF_ENABLED:
+                            pdf_content = convert_html_to_pdf(html_content)
+                            if pdf_content:
+                                pdf_file_name = f"정산서_{artist}_202412.pdf"
+                                zip_file.writestr(f"pdf/{pdf_file_name}", pdf_content)
                         
                         # 세부매출내역 엑셀 파일 생성
                         excel_buffer = BytesIO()
@@ -537,6 +550,26 @@ def generate_reports(revenue_file, song_file, issue_date):
 def main():
     try:
         st.title("아티스트별 정산서 생성 프로그램")
+        
+        if not PDF_ENABLED:
+            st.warning("""
+                PDF 변환 기능을 사용할 수 없습니다.
+                HTML 파일만 생성됩니다.
+                로컬에서 실행하시려면 다음 라이브러리를 설치해주세요:
+                
+                Ubuntu/Debian:
+                ```
+                sudo apt-get install python3-pip python3-cffi python3-brotli libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0 libffi-dev
+                ```
+                
+                macOS:
+                ```
+                brew install pango
+                ```
+                
+                Windows:
+                GTK3 런타임 설치 필요
+            """)
         
         st.write("📊 정산 데이터 파일들을 업로드하면 아티스트별 정산서가 자동으로 생성됩니다.")
         

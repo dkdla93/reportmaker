@@ -348,7 +348,6 @@ def convert_html_to_pdf(html_content):
         st.error(f"PDF 변환 중 오류 발생: {str(e)}")
         return None
 
-
 def generate_reports(revenue_file, song_file, issue_date):
     """보고서를 생성하고 ZIP 파일로 압축합니다."""
     try:

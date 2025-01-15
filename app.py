@@ -20,6 +20,24 @@ def clean_numeric_value(value):
     except (ValueError, TypeError):
         return 0.0
 
+def verify_artist_processing(revenue_df, processed_artists):
+    """모든 아티스트가 처리되었는지 검증합니다."""
+    # 매출 정산 데이터에서 추출된 모든 아티스트
+    all_artists_in_revenue = set(revenue_df['앨범아티스트'].unique())
+    
+    # 처리된 아티스트
+    processed_artists_set = set(processed_artists)
+    
+    # 처리되지 않은 아티스트 확인
+    unprocessed_artists = all_artists_in_revenue - processed_artists_set
+    
+    return {
+        'total_artists': len(all_artists_in_revenue),
+        'processed_artists': len(processed_artists_set),
+        'unprocessed_artists': list(unprocessed_artists),
+        'all_processed': len(unprocessed_artists) == 0
+    }
+
 def process_data(revenue_data, song_data, artist):
     """아티스트별 정산 데이터를 처리합니다."""
     # 정렬 순서 정의
@@ -52,7 +70,12 @@ def process_data(revenue_data, song_data, artist):
     total_revenue = float(album_summary['매출 순수익'].sum())
 
     # 3. 공제 내역 데이터 생성
-    artist_song_data = song_data[song_data['아티스트명'] == artist].iloc[0]
+    # 아티스트 정보가 없으면 예외 처리
+    artist_song_data = song_data[song_data['아티스트명'] == artist]
+    if artist_song_data.empty:
+        raise ValueError(f"아티스트 '{artist}'에 대한 곡비 정보를 찾을 수 없습니다.")
+    
+    artist_song_data = artist_song_data.iloc[0]
     deduction_data = {
         '곡비': float(artist_song_data['전월 잔액']),
         '공제 금액': float(artist_song_data['당월 차감액']),
@@ -170,6 +193,13 @@ def create_html_content(artist, issue_date, service_summary, album_summary, tota
             }
             .gray-bg {
                 background-color: #f8f9fa;
+            }
+            .unprocessed-artists {
+                background-color: #fff3cd;
+                border: 1px solid #ffeeba;
+                padding: 15px;
+                margin-bottom: 20px;
+                border-radius: 5px;
             }
         </style>
     </head>
@@ -300,12 +330,7 @@ def create_html_content(artist, issue_date, service_summary, album_summary, tota
         service_summary=service_summary,
         album_summary=album_summary,
         total_revenue=total_revenue,
-        deduction_data=deduction_data,
-        distribution_data=distribution_data
-    )
-    
-    return html_content
-
+        deduction_data=deduction_data
 
 def generate_reports(revenue_file, song_file, issue_date):
     """보고서를 생성하고 ZIP 파일로 압축합니다."""
@@ -389,11 +414,20 @@ def main():
     if revenue_file is not None and song_file is not None:
         if st.button("보고서 생성"):
             with st.spinner('보고서 생성 중...'):
-                zip_buffer, artist_count = generate_reports(revenue_file, song_file, issue_date)
+                # 변경된 부분: generate_reports()의 반환값이 3개로 변경
+                zip_buffer, artist_count, verification_result = generate_reports(revenue_file, song_file, issue_date)
                 
                 if zip_buffer and artist_count > 0:
-                    st.success(f"총 {artist_count}명의 아티스트 정산서가 생성되었습니다!")
+                    # 새로 추가된 성공 메시지
+                    st.success(f"총 {verification_result['total_artists']}명 중 {artist_count}명의 아티스트 정산서가 생성되었습니다!")
                     
+                    # 처리되지 않은 아티스트가 있다면 경고 표시
+                    if not verification_result['all_processed']:
+                        st.warning("일부 아티스트가 처리되지 않았습니다:")
+                        for artist in verification_result['unprocessed_artists']:
+                            st.warning(f"- {artist}")
+                    
+                    # 다운로드 버튼
                     st.download_button(
                         label="📥 전체 정산서 다운로드 (ZIP)",
                         data=zip_buffer,

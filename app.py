@@ -341,19 +341,27 @@ def generate_reports(revenue_file, song_file, issue_date):
         song_df = pd.read_excel(song_file)
         
         # 매출 순수익으로 컬럼명 변경
-        revenue_df = revenue_df.rename(columns={'권리사정산금액': '매출 순수익'})
+        if '매출 순수익' not in revenue_df.columns and '권리사정산금액' in revenue_df.columns:
+            revenue_df = revenue_df.rename(columns={'권리사정산금액': '매출 순수익'})
         
         # 아티스트 목록 추출
         artists = revenue_df['앨범아티스트'].unique()
         if len(artists) == 0:
             raise ValueError("아티스트 정보를 찾을 수 없습니다.")
         
+        # 처리된 아티스트 추적
+        processed_artists = []
+        
         # ZIP 파일을 저장할 메모리 버퍼
         zip_buffer = BytesIO()
         
         # ZIP 파일 생성
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            for artist in artists:
+            # 진행 상황 표시
+            progress_bar = st.progress(0)
+            total_artists = len(artists)
+            
+            for idx, artist in enumerate(artists, 1):
                 try:
                     # 데이터 처리
                     service_summary, album_summary, total_revenue, deduction_data, distribution_data = process_data(
@@ -385,16 +393,28 @@ def generate_reports(revenue_file, song_file, issue_date):
                         excel_file_name = f"세부매출내역_{artist}_202412.xlsx"
                         zip_file.writestr(f"excel/{excel_file_name}", excel_buffer.getvalue())
                         
+                        # 처리 성공한 아티스트 추가
+                        processed_artists.append(artist)
+                        
                 except Exception as e:
                     st.error(f"{artist} 처리 중 오류 발생: {str(e)}")
                     continue
+                finally:
+                    # 진행 상황 업데이트
+                    progress_bar.progress(idx / total_artists)
+            
+            # 진행 바 제거
+            progress_bar.empty()
+        
+        # 아티스트 처리 검증
+        verification_result = verify_artist_processing(revenue_df, processed_artists)
         
         zip_buffer.seek(0)
-        return zip_buffer, len(artists)
+        return zip_buffer, len(processed_artists), verification_result
         
     except Exception as e:
         st.error(f"보고서 생성 중 오류 발생: {str(e)}")
-        return None, 0
+        return None, 0, None
 
 def main():
     st.title("아티스트별 정산서 생성 프로그램")
@@ -405,8 +425,8 @@ def main():
     issue_date = st.date_input(
         "정산서 발행일자를 선택하세요",
         value=pd.Timestamp('2025-01-15'),
-        format="YYYY-MM-DD"  # 형식 변경
-    ).strftime('%Y. %m. %d')  # 표시 형식은 원하는 대로 변환
+        format="YYYY-MM-DD"
+    ).strftime('%Y. %m. %d')
     
     # 파일 업로드
     revenue_file = st.file_uploader("매출 정산 데이터 파일을 업로드하세요", type=['xlsx'], key="revenue")
@@ -415,25 +435,25 @@ def main():
     if revenue_file is not None and song_file is not None:
         if st.button("보고서 생성"):
             with st.spinner('보고서 생성 중...'):
-                # 변경된 부분: generate_reports()의 반환값이 3개로 변경
-                zip_buffer, artist_count, verification_result = generate_reports(revenue_file, song_file, issue_date)
+                zip_buffer, processed_count, verification_result = generate_reports(revenue_file, song_file, issue_date)
                 
-                if zip_buffer and artist_count > 0:
-                    # 새로 추가된 성공 메시지
-                    st.success(f"총 {verification_result['total_artists']}명 중 {artist_count}명의 아티스트 정산서가 생성되었습니다!")
+                if zip_buffer and verification_result:
+                    st.success(f"총 {verification_result['total_artists']}명 중 {processed_count}명의 아티스트 정산서가 생성되었습니다!")
                     
                     # 처리되지 않은 아티스트가 있다면 경고 표시
-                    if not verification_result['all_processed']:
-                        st.warning("일부 아티스트가 처리되지 않았습니다:")
-                        for artist in verification_result['unprocessed_artists']:
-                            st.warning(f"- {artist}")
+                    if verification_result['unprocessed_artists']:
+                        with st.expander("⚠️ 처리되지 않은 아티스트 목록", expanded=True):
+                            st.warning("다음 아티스트들의 정산서가 생성되지 않았습니다:")
+                            for artist in verification_result['unprocessed_artists']:
+                                st.write(f"- {artist}")
                     
                     # 다운로드 버튼
                     st.download_button(
                         label="📥 전체 정산서 다운로드 (ZIP)",
                         data=zip_buffer,
                         file_name=f"정산서_전체_202412.zip",
-                        mime="application/zip"
+                        mime="application/zip",
+                        help="생성된 모든 정산서를 ZIP 파일로 다운로드합니다."
                     )
 
 if __name__ == "__main__":

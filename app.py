@@ -8,149 +8,68 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import zipfile
 import jinja2
 from datetime import datetime
+import pdfkit
+import tempfile
 
 def clean_numeric_value(value):
     """숫자 값을 안전하게 처리합니다."""
     try:
         if pd.isna(value):
-            return 0.0
+            return 0
         if isinstance(value, str):
-            # 쉼표와 공백 제거
-            value = value.replace(',', '').strip()
-            if value == '':
-                return 0.0
+            value = value.replace(',', '')
         return float(value)
     except (ValueError, TypeError):
         return 0.0
 
-def validate_input_data(revenue_df, song_df):
-    """입력 데이터의 유효성을 검사합니다."""
-    errors = []
-    
-    # 필수 컬럼 확인
-    required_revenue_columns = ['앨범아티스트', '앨범명', '대분류', '중분류', '서비스명', '권리사정산금액']
-    required_song_columns = ['아티스트명', '전월 잔액', '당월 차감액', '당월 잔액', '정산 요율']
-    
-    missing_revenue_cols = [col for col in required_revenue_columns if col not in revenue_df.columns]
-    missing_song_cols = [col for col in required_song_columns if col not in song_df.columns]
-    
-    if missing_revenue_cols:
-        errors.append(f"매출 정산 데이터 필수 컬럼 누락: {', '.join(missing_revenue_cols)}")
-    if missing_song_cols:
-        errors.append(f"곡비 정산 데이터 필수 컬럼 누락: {', '.join(missing_song_cols)}")
-    
-    # 데이터 존재 여부 확인
-    if len(revenue_df) == 0:
-        errors.append("매출 정산 데이터가 비어 있습니다.")
-    if len(song_df) == 0:
-        errors.append("곡비 정산 데이터가 비어 있습니다.")
-    
-    return errors
-
 def process_data(revenue_data, song_data, artist):
     """아티스트별 정산 데이터를 처리합니다."""
-    try:
-        # 1. 아티스트 데이터 확인
-        service_data = revenue_data[revenue_data['앨범아티스트'] == artist].copy()
-        if len(service_data) == 0:
-            raise ValueError(f"'{artist}'의 매출 데이터가 없습니다.")
-        
-        artist_song_data = song_data[song_data['아티스트명'] == artist]
-        if len(artist_song_data) == 0:
-            raise ValueError(f"'{artist}'의 곡비 데이터가 없습니다.")
-        
-        # 2. 정렬 순서 정의
-        sort_order = {
-            '대분류': ['국내', '해외', 'YouTube'],
-            '중분류': ['광고수익', '구독수익', '기타', '스트리밍'],
-            '서비스명': ['기타 서비스', '스트리밍', '스트리밍 (음원)', 'Art Track', 'Sound Recording']
-        }
+    # 정렬 순서 정의
+    sort_order = {
+        '대분류': ['국내', '해외', 'YouTube'],
+        '중분류': ['광고수익', '구독수익', '기타', '스트리밍'],
+        '서비스명': ['기타 서비스', '스트리밍', '스트리밍 (음원)', 'Art Track', 'Sound Recording']
+    }
 
-        # 3. 음원 서비스별 정산내역 데이터 생성
-        service_summary = service_data.groupby(
-            ['앨범명', '대분류', '중분류', '서비스명']
-        )['매출 순수익'].sum().reset_index()
+    # 1. 음원 서비스별 정산내역 데이터 생성
+    service_data = revenue_data[revenue_data['앨범아티스트'] == artist].copy()
+    service_summary = service_data.groupby(
+        ['앨범명', '대분류', '중분류', '서비스명']
+    )['매출 순수익'].sum().reset_index()
 
-        # 정렬을 위한 임시 컬럼 생성
-        for col in ['대분류', '중분류', '서비스명']:
-            service_summary[f'{col}_sort'] = service_summary[col].map(
-                {v: i for i, v in enumerate(sort_order[col])}
-            ).fillna(len(sort_order[col]))
+    # 정렬을 위한 임시 컬럼 생성
+    for col in ['대분류', '중분류', '서비스명']:
+        service_summary[f'{col}_sort'] = service_summary[col].map(
+            {v: i for i, v in enumerate(sort_order[col])}
+        ).fillna(len(sort_order[col]))
 
-        # 정렬 적용
-        service_summary = service_summary.sort_values(
-            by=['앨범명', '대분류_sort', '중분류_sort', '서비스명_sort']
-        ).drop(['대분류_sort', '중분류_sort', '서비스명_sort'], axis=1)
+    # 정렬 적용
+    service_summary = service_summary.sort_values(
+        by=['앨범명', '대분류_sort', '중분류_sort', '서비스명_sort']
+    ).drop(['대분류_sort', '중분류_sort', '서비스명_sort'], axis=1)
 
-        # 4. 앨범별 정산내역 데이터 생성
-        album_summary = service_data.groupby(['앨범명'])['매출 순수익'].sum().reset_index()
-        album_summary = album_summary.sort_values('앨범명')
-        total_revenue = float(album_summary['매출 순수익'].sum())
+    # 2. 앨범별 정산내역 데이터 생성
+    album_summary = service_data.groupby(['앨범명'])['매출 순수익'].sum().reset_index()
+    album_summary = album_summary.sort_values('앨범명')
+    total_revenue = float(album_summary['매출 순수익'].sum())
 
-        # 5. 공제 내역 데이터 생성
-        artist_song_row = artist_song_data.iloc[0]
-        
-        # 디버깅: 곡비 데이터 출력
-        st.write(f"### {artist}의 곡비 데이터:")
-        st.write({
-            '전월 잔액': artist_song_row['전월 잔액'],
-            '당월 차감액': artist_song_row['당월 차감액'],
-            '당월 잔액': artist_song_row['당월 잔액'],
-            '정산 요율': artist_song_row['정산 요율']
-        })
-        
-        # 데이터 타입 확인 및 변환
-        previous_balance = clean_numeric_value(artist_song_row['전월 잔액'])
-        current_deduction = clean_numeric_value(artist_song_row['당월 차감액'])
-        current_balance = clean_numeric_value(artist_song_row['당월 잔액'])
-        revenue_share_rate = clean_numeric_value(artist_song_row['정산 요율'])
-        
-        # 디버깅: 변환된 데이터 출력
-        st.write("### 변환된 데이터:")
-        st.write({
-            '전월 잔액(변환)': previous_balance,
-            '당월 차감액(변환)': current_deduction,
-            '당월 잔액(변환)': current_balance,
-            '정산 요율(변환)': revenue_share_rate
-        })
-        
-        deduction_data = {
-            '곡비': previous_balance,
-            '공제 금액': current_deduction,
-            '공제 후 남은 곡비': current_balance,
-            '공제 적용 금액': float(total_revenue - current_deduction)
-        }
+    # 3. 공제 내역 데이터 생성
+    artist_song_data = song_data[song_data['아티스트명'] == artist].iloc[0]
+    deduction_data = {
+        '곡비': float(artist_song_data['전월 잔액']),
+        '공제 금액': float(artist_song_data['당월 차감액']),
+        '공제 후 남은 곡비': float(artist_song_data['당월 잔액']),
+        '공제 적용 금액': float(total_revenue - artist_song_data['당월 차감액'])
+    }
 
-        # 6. 수익 배분 데이터 생성
-        applied_amount = float(deduction_data['공제 적용 금액'] * revenue_share_rate)
-        distribution_data = {
-            '항목': '수익 배분율',
-            '적용율': revenue_share_rate,
-            '적용 금액': applied_amount
-        }
-        
-        # 디버깅: 최종 데이터 출력
-        st.write("### 최종 계산 결과:")
-        st.write({
-            '총 매출': total_revenue,
-            '공제 내역': deduction_data,
-            '수익 배분': distribution_data
-        })
+    # 4. 수익 배분 데이터 생성
+    distribution_data = {
+        '항목': '수익 배분율',
+        '적용율': float(artist_song_data['정산 요율']),
+        '적용 금액': float(deduction_data['공제 적용 금액'] * artist_song_data['정산 요율'])
+    }
 
-        return service_summary, album_summary, total_revenue, deduction_data, distribution_data
-    except Exception as e:
-        st.error(f"데이터 처리 중 오류 발생 ({artist}): {str(e)}")
-        st.write("### 오류 발생 시점의 데이터:")
-        try:
-            st.write({
-                '아티스트': artist,
-                '곡비 데이터 존재': len(artist_song_data) > 0,
-                '매출 데이터 존재': len(service_data) > 0,
-                '총 매출': total_revenue if 'total_revenue' in locals() else 'N/A'
-            })
-        except:
-            pass
-        raise
+    return service_summary, album_summary, total_revenue, deduction_data, distribution_data
 
 def create_html_content(artist, issue_date, service_summary, album_summary, total_revenue, deduction_data, distribution_data):
     """HTML 보고서를 생성합니다."""
@@ -253,13 +172,6 @@ def create_html_content(artist, issue_date, service_summary, album_summary, tota
             }
             .gray-bg {
                 background-color: #f8f9fa;
-            }
-            .unprocessed-artists {
-                background-color: #fff3cd;
-                border: 1px solid #ffeeba;
-                padding: 15px;
-                margin-bottom: 20px;
-                border-radius: 5px;
             }
         </style>
     </head>
@@ -390,8 +302,52 @@ def create_html_content(artist, issue_date, service_summary, album_summary, tota
         service_summary=service_summary,
         album_summary=album_summary,
         total_revenue=total_revenue,
-        deduction_data=deduction_data
-        )
+        deduction_data=deduction_data,
+        distribution_data=distribution_data
+    )
+    
+    return html_content
+
+def convert_html_to_pdf(html_content):
+    """HTML 내용을 PDF로 변환합니다."""
+    try:
+        # wkhtmltopdf 설정
+        options = {
+            'encoding': 'UTF-8',
+            'page-size': 'A4',
+            'margin-top': '0.5in',
+            'margin-right': '0.5in',
+            'margin-bottom': '0.5in',
+            'margin-left': '0.5in',
+            'enable-local-file-access': None,
+            'no-outline': None,
+            'quiet': ''
+        }
+        
+        # 임시 HTML 파일 생성
+        with tempfile.NamedTemporaryFile(suffix='.html', delete=False, mode='w', encoding='utf-8') as temp_html:
+            temp_html.write(html_content)
+            temp_html_path = temp_html.name
+        
+        # 임시 PDF 파일 생성
+        temp_pdf_path = tempfile.mktemp(suffix='.pdf')
+        
+        # HTML을 PDF로 변환
+        pdfkit.from_file(temp_html_path, temp_pdf_path, options=options)
+        
+        # PDF 파일 읽기
+        with open(temp_pdf_path, 'rb') as pdf_file:
+            pdf_content = pdf_file.read()
+        
+        # 임시 파일 삭제
+        os.unlink(temp_html_path)
+        os.unlink(temp_pdf_path)
+        
+        return pdf_content
+    except Exception as e:
+        st.error(f"PDF 변환 중 오류 발생: {str(e)}")
+        return None
+
 
 def generate_reports(revenue_file, song_file, issue_date):
     """보고서를 생성하고 ZIP 파일로 압축합니다."""
@@ -403,10 +359,6 @@ def generate_reports(revenue_file, song_file, issue_date):
         except Exception as e:
             raise ValueError(f"엑셀 파일 읽기 실패: {str(e)}")
         
-        # 2. 입력 데이터 검증
-        validation_errors = validate_input_data(revenue_df, song_df)
-        if validation_errors:
-            raise ValueError("\n".join(validation_errors))
         
         # 3. 매출 순수익으로 컬럼명 변경
         if '매출 순수익' not in revenue_df.columns and '권리사정산금액' in revenue_df.columns:
@@ -454,6 +406,12 @@ def generate_reports(revenue_file, song_file, issue_date):
                         # HTML 파일 저장
                         html_file_name = f"정산서_{artist}_202412.html"
                         zip_file.writestr(f"html/{html_file_name}", html_content.encode('utf-8'))
+                        
+                        # PDF 파일 생성 및 저장
+                        pdf_content = convert_html_to_pdf(html_content)
+                        if pdf_content:
+                            pdf_file_name = f"정산서_{artist}_202412.pdf"
+                            zip_file.writestr(f"pdf/{pdf_file_name}", pdf_content)
                         
                         # 세부매출내역 엑셀 파일 생성
                         excel_buffer = BytesIO()
@@ -506,6 +464,19 @@ def generate_reports(revenue_file, song_file, issue_date):
 def main():
     try:
         st.title("아티스트별 정산서 생성 프로그램")
+        
+        # wkhtmltopdf 설치 확인
+        try:
+            path_wkhtmltopdf = pdfkit.configuration()
+            if not path_wkhtmltopdf:
+                st.warning("""
+                    PDF 변환을 위해 wkhtmltopdf를 설치해주세요.
+                    - macOS: brew install wkhtmltopdf
+                    - Windows: https://wkhtmltopdf.org/downloads.html
+                    - Linux: sudo apt-get install wkhtmltopdf
+                """)
+        except Exception:
+            st.warning("PDF 변환을 위해 wkhtmltopdf가 필요합니다.")
         
         st.write("📊 정산 데이터 파일들을 업로드하면 아티스트별 정산서가 자동으로 생성됩니다.")
         

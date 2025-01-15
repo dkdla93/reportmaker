@@ -8,7 +8,6 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 import zipfile
 import jinja2
 from datetime import datetime
-import json
 
 def clean_numeric_value(value):
     """숫자 값을 안전하게 처리합니다."""
@@ -315,31 +314,11 @@ def generate_reports(revenue_file, song_file, issue_date):
         revenue_df = pd.read_excel(revenue_file)
         song_df = pd.read_excel(song_file)
         
-        # 입력 파일 데이터 무결성 검증
-        validation_results = validate_input_files(revenue_df, song_df)
-        if not validation_results['is_valid']:
-            error_details = {
-                'revenue_errors': validation_results['revenue_errors'],
-                'song_errors': validation_results['song_errors']
-            }
-            raise ValueError("입력 파일 검증에 실패했습니다.", error_details)
+        # 매출 순수익으로 컬럼명 변경
+        revenue_df = revenue_df.rename(columns={'권리사정산금액': '매출 순수익'})
         
-        # 매출 순수익으로 컬럼명 변경 (만약 존재하지 않는 경우)
-        if '매출 순수익' not in revenue_df.columns:
-            revenue_df = revenue_df.rename(columns={'권리사정산금액': '매출 순수익'})
-        
-        # 아티스트 목록 추출 (중복 제거)
+        # 아티스트 목록 추출
         artists = revenue_df['앨범아티스트'].unique()
-        
-        # 처리 결과 추적용 딕셔너리 초기화
-        artist_processing_status = {
-            'total_artists': len(artists),
-            'processed_artists': [],
-            'failed_artists': [],
-            'processing_errors': {},
-            'validation_errors': validation_results.get('revenue_errors', []) + validation_results.get('song_errors', [])
-        }
-        
         if len(artists) == 0:
             raise ValueError("아티스트 정보를 찾을 수 없습니다.")
         
@@ -380,52 +359,16 @@ def generate_reports(revenue_file, song_file, issue_date):
                         excel_file_name = f"세부매출내역_{artist}_202412.xlsx"
                         zip_file.writestr(f"excel/{excel_file_name}", excel_buffer.getvalue())
                         
-                        # 성공한 아티스트 추가
-                        artist_processing_status['processed_artists'].append(artist)
-                        
                 except Exception as e:
-                    # 실패한 아티스트 추적
-                    error_msg = str(e)
-                    artist_processing_status['failed_artists'].append(artist)
-                    artist_processing_status['processing_errors'][artist] = error_msg
-                    st.error(f"{artist} 처리 중 오류 발생: {error_msg}")
+                    st.error(f"{artist} 처리 중 오류 발생: {str(e)}")
                     continue
         
         zip_buffer.seek(0)
-        
-        # 결과 검증 및 로그 생성
-        verification_log = f"""정산서 처리 결과 검증
-== 파일 검증 ==
-입력 파일 검증 결과: {'성공' if validation_results['is_valid'] else '실패'}
-
-== 아티스트 처리 ==
-총 아티스트 수: {artist_processing_status['total_artists']}
-처리 성공 아티스트 수: {len(artist_processing_status['processed_artists'])}
-처리 실패 아티스트 수: {len(artist_processing_status['failed_artists'])}
-
-== 파일 검증 에러 ==
-{json.dumps(artist_processing_status['validation_errors'], indent=2, ensure_ascii=False) if artist_processing_status['validation_errors'] else '없음'}
-
-== 처리 실패 아티스트 목록 ==
-{', '.join(artist_processing_status['failed_artists']) if artist_processing_status['failed_artists'] else '없음'}
-
-== 실패 상세 내역 ==
-{json.dumps(artist_processing_status['processing_errors'], indent=2, ensure_ascii=False) if artist_processing_status['processing_errors'] else '없음'}
-"""
-        
-        # 로그 파일을 ZIP에 추가
-        zip_file = zipfile.ZipFile(zip_buffer, 'a', zipfile.ZIP_DEFLATED)
-        zip_file.writestr('processing_log.txt', verification_log)
-        zip_file.close()
-        
-        zip_buffer.seek(0)
-        
-        return zip_buffer, artist_processing_status
+        return zip_buffer, len(artists)
         
     except Exception as e:
-        error_msg = str(e)
-        st.error(f"보고서 생성 중 오류 발생: {error_msg}")
-        return None, None
+        st.error(f"보고서 생성 중 오류 발생: {str(e)}")
+        return None, 0
 
 def main():
     st.title("아티스트별 정산서 생성 프로그램")
@@ -446,32 +389,17 @@ def main():
     if revenue_file is not None and song_file is not None:
         if st.button("보고서 생성"):
             with st.spinner('보고서 생성 중...'):
-                zip_buffer, artist_processing_status = generate_reports(revenue_file, song_file, issue_date)
+                zip_buffer, artist_count = generate_reports(revenue_file, song_file, issue_date)
                 
-                if zip_buffer and artist_processing_status:
-                    total_artists = artist_processing_status['total_artists']
-                    processed_artists = len(artist_processing_status['processed_artists'])
-                    failed_artists = len(artist_processing_status['failed_artists'])
+                if zip_buffer and artist_count > 0:
+                    st.success(f"총 {artist_count}명의 아티스트 정산서가 생성되었습니다!")
                     
-                    if processed_artists > 0:
-                        st.success(f"총 {total_artists}명 중 {processed_artists}명의 아티스트 정산서가 생성되었습니다.")
-                        
-                        if failed_artists > 0:
-                            st.warning(f"{failed_artists}명의 아티스트 처리에 실패했습니다.")
-                        
-                        st.download_button(
-                            label="📥 전체 정산서 다운로드 (ZIP)",
-                            data=zip_buffer,
-                            file_name=f"정산서_전체_202412.zip",
-                            mime="application/zip",
-                            help="생성된 모든 정산서를 ZIP 파일로 다운로드합니다."
-                        )
-                        
-                        # 처리 실패한 아티스트 정보 표시
-                        if failed_artists > 0:
-                            with st.expander("실패한 아티스트 상세 내역"):
-                                for artist, error in artist_processing_status['processing_errors'].items():
-                                    st.error(f"{artist}: {error}")
+                    st.download_button(
+                        label="📥 전체 정산서 다운로드 (ZIP)",
+                        data=zip_buffer,
+                        file_name=f"정산서_전체_202412.zip",
+                        mime="application/zip"
+                    )
 
 if __name__ == "__main__":
     main()

@@ -4,3 +4,7 @@ numpy
 openpyxl
 jinja2
 python-dateutil
+pdfkit
+et-xmlfile
+pytz
+tzdata

@@ -9,6 +9,8 @@ import zipfile
 import jinja2
 from datetime import datetime
 import traceback
+from weasyprint import HTML, CSS
+from weasyprint.text.fonts import FontConfiguration
 
 # WeasyPrint 조건부 임포트
 PDF_ENABLED = True
@@ -316,10 +318,10 @@ def create_html_content(artist, issue_date, service_summary, album_summary, tota
     
     return html_content
 
-def convert_html_to_pdf(html_content):
+def convert_html_to_pdf(html_content, creator_id):
     """HTML 내용을 PDF로 변환합니다."""
     try:
-        print(f"[DEBUG] PDF 생성 시작")
+        print(f"[DEBUG] PDF 생성 시작 - 크리에이터: {creator_id}")
         
         # 폰트 설정
         font_config = FontConfiguration()
@@ -380,11 +382,13 @@ def convert_html_to_pdf(html_content):
                 font-size: 0.7em;
                 border-spacing: 0;
                 border-collapse: collapse;
+                width: 100%;
             }
             .earnings-table th {
                 font-size: 0.95em;
                 padding: 2px 3px;
                 line-height: 1;
+                background-color: #f8f9fa;
             }
             .earnings-table td {
                 padding: 1px 3px;
@@ -402,6 +406,10 @@ def convert_html_to_pdf(html_content):
             .earnings-table td {
                 margin: 0 !important;
                 vertical-align: middle;
+                text-align: left;
+            }
+            .number-cell {
+                text-align: right !important;
             }
         ''', font_config=font_config)
 
@@ -417,9 +425,7 @@ def convert_html_to_pdf(html_content):
         html_doc.write_pdf(
             target=pdf_buffer,
             stylesheets=[css],
-            font_config=font_config,
-            optimize_size=('fonts', 'images'),  # PDF 크기 최적화
-            zoom=1.0  # 기본 확대/축소 설정
+            font_config=font_config
         )
         pdf_buffer.seek(0)
 
@@ -430,7 +436,7 @@ def convert_html_to_pdf(html_content):
         return pdf_content
         
     except Exception as e:
-        print(f"PDF 변환 중 오류 발생: {str(e)}")
+        print(f"[ERROR] PDF 생성 중 오류 발생: {str(e)}")
         traceback.print_exc()
         return None
 
@@ -492,12 +498,13 @@ def generate_reports(revenue_file, song_file, issue_date):
                         html_file_name = f"정산서_{artist}_202412.html"
                         zip_file.writestr(f"html/{html_file_name}", html_content.encode('utf-8'))
                         
-                        # PDF 파일 생성 시도 (선택적)
-                        if PDF_ENABLED:
-                            pdf_content = convert_html_to_pdf(html_content)
-                            if pdf_content:
-                                pdf_file_name = f"정산서_{artist}_202412.pdf"
-                                zip_file.writestr(f"pdf/{pdf_file_name}", pdf_content)
+                        # PDF 파일 생성
+                        pdf_content = convert_html_to_pdf(html_content, artist)
+                        if pdf_content:
+                            pdf_file_name = f"정산서_{artist}_202412.pdf"
+                            zip_file.writestr(f"pdf/{pdf_file_name}", pdf_content)
+                        else:
+                            st.warning(f"{artist}: PDF 생성 실패")
                         
                         # 세부매출내역 엑셀 파일 생성
                         excel_buffer = BytesIO()

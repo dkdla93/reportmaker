@@ -331,6 +331,7 @@ def create_html_content(artist, issue_date, service_summary, album_summary, tota
         album_summary=album_summary,
         total_revenue=total_revenue,
         deduction_data=deduction_data
+        )
 
 def generate_reports(revenue_file, song_file, issue_date):
     """보고서를 생성하고 ZIP 파일로 압축합니다."""
